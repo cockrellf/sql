@@ -1,0 +1,188 @@
+#F1 GoogleSQL
+CREATE OR REPLACE TABLE gts_tpms_pms.agile_data AS SELECT * FROM (
+
+WITH components AS (
+SELECT 
+component_id,
+custom_field.custom_field_name,
+custom_field.custom_field_id,
+path
+FROM buganizer.componentsfresh.live AS c, c.custom_fields as custom_field, c.component_id_path as path
+GROUP BY
+component_id,
+custom_field_name,
+custom_field_id,
+path
+),
+
+metadata AS (
+SELECT 
+i.issue_id as bug_id,
+assignee_user.email AS sm,
+verifier_user.email AS pm,
+i.title as summary,
+blocked_by_issue_id,
+max(case 
+    when i.status IN ('ASSIGNED','NEW') then 'NOT STARTED'
+    when i.status IN ('ACCEPTED') then 'IN PROGRESS'
+    when i.status IN ('FIXED', 'VERIFIED', 'NOT_REPRODUCIBLE','INTENDED_BEHAVIOR', 'INFEASIBLE') then 'DONE'
+    end) as fstatus,
+max(case when(c.custom_field_name = 'Points (enum)') and cf_value.value is null then 0 else SAFE_CAST(cf_value.value AS INT64) end) as swag,
+max(case when c.custom_field_name = 'Points Remaining' and SUBSTR(i.title,1,3) = '[C-' and cf_value.value is null then 0 
+         when c.custom_field_name = 'Points Remaining' and SUBSTR(i.title,1,3) = '[C-' and cf_value.value is not null then SAFE_CAST(cf_value.value AS INT64)
+    end) as cap_swag,
+max(case when (c.custom_field_name = 'Kanban Stage') then cf_value.value end) as Kanban,
+max(case when (c.custom_field_name = 'Feature Type') then cf_value.value end) as FeatureType,
+max(case when (c.custom_field_name = 'Commitment Deliverable') then cf_value.value end) as Deliverable,
+max(case when (c.custom_field_name = 'TL') then cf_value.value end) as TL,
+max(case when (c.custom_field_name = 'PO') then cf_value.value end) as PO,
+max(case when (c.custom_field_name = 'SF') then cf_value.value end) as SF,
+max(case when (c.custom_field_name = 'BL') then cf_value.value end) as BL,
+max(case when (c.custom_field_name = 'Iteration') then cf_value.value end) as iteration,
+max(case when SUBSTR(case when (c.custom_field_name = '1-pager') then cf_value.value end,1,3) = 'htt' then cf_value.value else null end) as ONEpgr,
+max(case when (c.custom_field_name = '1-pgr Status') then cf_value.value end) as ONEpgr_status,
+max(case when (c.custom_field_name = 'POC Status') then cf_value.value end) as POC_status,	
+max(case when (c.custom_field_name = 'Program Increment') then cf_value.value end) as PI,
+max(case when (c.custom_field_name = 'Target Release Date') then cf_value.value end) as target_date,
+max(case when (c.custom_field_name = 'Target Start Date') then cf_value.value end) as start_date,
+max(case when (SUBSTR(h.name,1,3) = '[I-') then h.name end) as initiative,
+max(case when (SUBSTR(h.name,1,3) = '[C-') then h.name end) as capability,
+max(case when (SUBSTR(h.name,1,3) = '[F-') then h.name end) as feature,
+--max(case when (SUBSTR(h.name,1,3) = '2020.') then h.name end) as iteration,
+max(case
+  when (h.hotlist_id = 2227657) then 'CSS - Bug Mgmt'
+  when (h.hotlist_id = 2163856) then 'CSS - Channels/UR'
+  when (h.hotlist_id = 2154904) then 'CSS - Core Data'
+  when (h.hotlist_id = 2228196) then 'CSS - VectorX'
+  when (h.hotlist_id = 2228745) then 'CSS - XPP'
+  end) as Team,
+max(case
+  when (SUBSTR(i.title,1,3) = '[I-') then 'Initiative'
+  when (SUBSTR(i.title,1,3) = '[C-') then 'Capability'
+  when (SUBSTR(i.title,1,3) = '[F-') then 'Feature'
+  else 'Story' end) as AgileType
+FROM ((google.buganizer.issuestatsfresh.live as i CROSS JOIN i.custom_field_values as cf_value CROSS JOIN i.hotlist_id as hotlist)
+LEFT JOIN components c ON CAST(cf_value.custom_field_id AS STRING) = c.custom_field_id)
+FULL JOIN buganizer.hotlistsfresh.live h ON  hotlist = h.hotlist_id
+WHERE i.component_id = 813214 and i.status != 'DUPLICATE' and h.is_archived is FALSE
+GROUP BY
+i.issue_id,
+assignee_user.email,
+verifier_user.email,
+i.title,
+blocked_by_issue_id
+),
+
+parents AS (
+SELECT 
+  title,
+  max(case when (SUBSTR(h.name,1,3) = '[I-') then h.name end) as parent,
+FROM (google.buganizer.issuestatsfresh.live as i CROSS JOIN i.hotlist_id as hotlist)
+FULL JOIN buganizer.hotlistsfresh.live h ON  hotlist = h.hotlist_id
+WHERE i.component_id = 813214 and i.status != 'DUPLICATE' and h.is_archived is FALSE
+GROUP BY title
+),
+
+f2i AS(
+  SELECT
+    m.summary as f_title,
+    max(case when p.title = m.capability then p.parent end) AS feature_initiative,
+ FROM metadata AS m
+  LEFT JOIN parents p ON m.capability = p.title
+GROUP BY f_title
+),
+
+stories AS (
+SELECT 
+i.issue_id as issue,
+title,
+max(case when status IN ('FIXED', 'VERIFIED', 'NOT_REPRODUCIBLE', 'OBSOLETE','INTENDED_BEHAVIOR', 'INFEASIBLE', 'DUPLICATE', 'INFEASIBLE') then 'closed' Else 'open' end) as status,
+max(case when(c.custom_field_name = 'Points (enum)') and cf_value.value is not null then SAFE_CAST(cf_value.value AS INT64) else 0 end) as points,
+max(case when (SUBSTR(h.name,1,3) = '[F-') then h.name end) as feature,
+FROM ((google.buganizer.issuestatsfresh.live as i CROSS JOIN i.custom_field_values as cf_value CROSS JOIN i.hotlist_id as hotlist)
+LEFT JOIN components c ON CAST(cf_value.custom_field_id AS STRING) = c.custom_field_id)
+FULL JOIN buganizer.hotlistsfresh.live h ON  hotlist = h.hotlist_id
+WHERE c.path IN ('35634') AND SUBSTR(h.name,1,3) = '[F-' AND i.component_id <> 813214
+GROUP BY
+issue, title
+),
+
+points AS(
+  SELECT
+    DISTINCT(m.feature) as feature,
+    sum(case when status = 'closed' AND us.feature is not null then us.points end) AS feature_points,
+    sum(case when us.feature is not NULL then us.points end) AS total_points,
+ FROM metadata AS m
+  LEFT JOIN stories us ON m.feature = us.feature
+GROUP BY feature
+)
+
+SELECT
+  bug_id,
+  sm,
+  pm,
+  summary,
+  blocked_by_issue_id,
+  m.feature,
+  points,
+  p.feature_points,
+  p.total_points,
+  Kanban,
+  FeatureType,
+  ONEpgr,
+  ONEpgr_status,
+  POC_status,
+  start_date,
+  target_date,
+  Team,
+  AgileType,
+  capability,
+  iteration,
+  PI,
+  m.fstatus,
+  us.status,
+  TL,
+  PO,
+  SF,
+  BL,
+  m.swag,
+  m.cap_swag,
+  max(case when m.initiative is null then feature_initiative else m.initiative end) as initiative,
+  max(case when m.swag > p.total_points then m.swag else p.total_points end) AS bestswag
+FROM metadata as m 
+FULL OUTER JOIN stories us ON m.bug_id = us.issue
+LEFT JOIN points p ON m.feature = p.feature
+LEFT JOIN f2i f ON m.summary = f.f_title
+WHERE bug_id IS NOT NULL
+GROUP BY 
+   bug_id,
+  sm,
+  pm,
+  summary,
+  blocked_by_issue_id,
+  m.feature,
+  points,
+  p.feature_points,
+  p.total_points,
+  Kanban,
+  FeatureType,
+  ONEpgr,
+  ONEpgr_status,
+  POC_status,
+  start_date,
+  target_date,
+  Team,
+  AgileType,
+  capability,
+  iteration,
+  PI,
+  us.status,
+  m.fstatus,
+  TL,
+  PO,
+  SF,
+  BL, 
+  m.swag,
+  m.cap_swag
+  ORDER BY m.fstatus
+);
