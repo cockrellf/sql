@@ -1,0 +1,26 @@
+#Dremel DremelSQL
+DEFINE INLINE TABLE V1fields
+SELECT
+feature AS feature_all,
+max(case when summary = feature and AgileType = 'Feature' then 'fMatch' else 'fError' end) AS fCheck
+FROM  gts_tpms_pms.agile_data
+GROUP BY feature_all
+
+CREATE OR REPLACE TABLE gts_tpms_pms.v1stories AS SELECT * FROM (
+ SELECT
+  max(case when issue is null then '' else 'Story' end) as AssetType,
+  CONCAT('https://b.corp.google.com/issues/',CAST(issue AS STRING)) as Reference,
+  title as Name,
+  feature AS Super,
+  max(case when issue is null then '' else 'New Functionality' end) as Category,
+  max(case when team is null then '' else team end) as Team,
+  max(case when points is null then 0 else points end) as Estimate,
+  max(case when PI = '1' or PI = '2' then concat('Support 2020.',CAST(PI AS STRING)) else 'Support' end)as Scope,
+  max(case when status = 'closed' then 'Accepted' else 'In Progress'  end) as Status,
+  max(case when iteration is null then '' else iteration end) as Timebox
+
+FROM  gts_tpms_pms.agile_stories a LEFT JOIN V1fields v on a.feature = v.feature_all
+OMIT RECORD IF initiative = "[I-005] Support: KTLO" OR fCheck = 'fError'
+Group BY Name, Reference, Super
+Order by Name
+);
